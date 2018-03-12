@@ -12,7 +12,7 @@
         , get_hash_at_height/1
         , hash_is_connected_to_genesis/1
         , hash_is_in_main_chain/1
-        , insert_block/1
+        , insert_block/2
         ]).
 
 %% For tests
@@ -34,9 +34,9 @@
 get_hash_at_height(Height) when is_integer(Height), Height >= 0 ->
     get_hash_at_height(Height, new_state_from_persistence()).
 
--spec insert_block(#block{}) -> 'ok' | {'error', any()}.
-insert_block(Block) ->
-    Node = wrap_block(Block),
+-spec insert_block(#block{}, block_type()) -> 'ok' | {'error', any()}.
+insert_block(Block, Type) ->
+    Node = wrap_block(Block, Type),
     try internal_insert(Node, Block)
     catch throw:?internal_error(What) -> {error, What}
     end.
@@ -79,7 +79,8 @@ hash_is_in_main_chain(Hash) ->
 new_state_from_persistence() ->
     Fun = fun() ->
                   #{ type                  => ?MODULE
-                   , top_block_hash        => aec_db:get_top_block_hash()
+                   , top_block_hash    => aec_db:get_top_block_hash()
+                   , top_key_block_height  => aec_db:get_top_block_height()
                    , genesis_block_hash    => aec_db:get_genesis_hash()
                    }
           end,
@@ -93,7 +94,8 @@ persist_state(State) ->
             case get_top_block_hash(State) of
                 undefined -> ok;
                 TopBlockHash ->
-                    aec_db:write_top_block_hash(TopBlockHash)
+                    aec_db:write_top_block_hash(TopBlockHash),
+                    aec_db:write_top_block_height(get_top_block_height(State))
             end
     end.
 
@@ -104,6 +106,8 @@ internal_error(What) ->
 
 get_genesis_hash(#{genesis_block_hash := GH}) -> GH.
 
+get_top_block_height(#{top_block_height := Height}) -> Height.
+
 get_top_block_hash(#{top_block_hash := H}) -> H.
 set_top_block_hash(H, State) when is_binary(H) -> State#{top_block_hash => H}.
 
@@ -113,15 +117,19 @@ set_top_block_hash(H, State) when is_binary(H) -> State#{top_block_hash => H}.
 
 -record(node, { header  :: #header{}
               , hash    :: binary()
+              , height  :: pos_integer()
+              , type    :: block_type()
               }).
 
 hash(#node{hash = Hash}) -> Hash.
 
 prev_hash(#node{header = H}) -> aec_headers:prev_hash(H).
 
-node_height(#node{header = H}) -> aec_headers:height(H).
+node_height(#node{height = Height}) -> Height.
 
 node_version(#node{header = H}) -> aec_headers:version(H).
+
+node_difficulty(#node{type = micro}) -> 0;
 
 node_difficulty(#node{header = H}) -> aec_headers:difficulty(H).
 
@@ -135,6 +143,10 @@ maybe_add_genesis_hash(#{genesis_block_hash := undefined} = State, Node) ->
 maybe_add_genesis_hash(State,_Node) ->
     State.
 
+%% NG-INFO: microblock cannot be a genesis block
+assert_not_new_genesis(#node{type = micro}, #{genesis_block_hash := undefined}) ->
+    internal_error(rejecting_micro_genesis_block);
+assert_not_new_genesis(#node{type = micro}, _) -> ok;
 assert_not_new_genesis(_Node, #{genesis_block_hash := undefined}) -> ok;
 assert_not_new_genesis(Node, #{genesis_block_hash := GHash}) ->
     case (node_height(Node) =:= aec_block_genesis:height()
@@ -149,18 +161,27 @@ node_is_genesis(Node, #{genesis_block_hash := undefined}) ->
 node_is_genesis(Node, State) ->
     hash(Node) =:= get_genesis_hash(State).
 
-wrap_block(Block) ->
+wrap_block(Block, Type) ->
     Header = aec_blocks:to_header(Block),
     {ok, Hash} = aec_headers:hash_header(Header),
     #node{ header = Header
          , hash = Hash
+         , height = aec_headers:height(Header)
+         , type = Type
          }.
 
 wrap_header(Header) ->
     {ok, Hash} = aec_headers:hash_header(Header),
     #node{ header = Header
          , hash = Hash
+         , height = aec_headers:height(Header)
+         , type = aec_blocks:type()
          }.
+
+set_height(#node{type = micro} = Node, #{top_key_block_height := Height}) ->
+    Node#node{height = Height};
+set_height(#node{type = key, header = H} = Node, _State) ->
+    Node#node{height = aec_headers:height(H)}.
 
 export_header(#node{header = Header}) ->
     Header.
@@ -218,7 +239,8 @@ internal_insert(Node, Block) ->
                           %% Keep track of which node we are actually
                           %% adding to avoid giving spurious error
                           %% messages.
-                          State1 = State#{ currently_adding => hash(Node)},
+                          State1 = State#{
+                                current_hash => hash(Node)},
                           assert_not_new_genesis(Node, State1),
                           ok = db_put_node(Block, hash(Node)),
                           State2 = update_state_tree(Node, maybe_add_genesis_hash(State1, Node)),
@@ -232,6 +254,8 @@ internal_insert(Node, Block) ->
         {ok, Old} -> internal_error({same_key_different_content, Node, Old})
     end.
 
+%% NG-INFO: height asserted at the beginning to be equal to key block height
+assert_previous_height(#node{type = micro}) -> ok;
 assert_previous_height(Node) ->
     case db_find_node(prev_hash(Node)) of
         {ok, PrevNode} ->
@@ -245,6 +269,8 @@ assert_previous_height(Node) ->
 %% To assert the target calculation we need DeltaHeight headers counted
 %% backwards from the node we want to assert. If Height <= DeltaHeight
 %% we will need all headers back to genesis.
+%% NG-INFO: micro blocks are signed, so we don't validate the target
+assert_calculated_target(#node{type = micro}) -> ok;
 assert_calculated_target(Node) ->
     case db_find_node(prev_hash(Node)) of
         error -> ok;
@@ -361,11 +387,12 @@ get_state_trees_in(Node, State) ->
              aec_block_genesis:populated_trees(),
              aec_block_genesis:genesis_difficulty(),
              hash(Node)};
-        false -> db_find_state(prev_hash(Node))
+        false -> db_find_state(prev_hash(Node)) %% NG-INFO: this holds for NG without changes.
+                                                %% It causes micro-forks that we don't GC for now
     end.
 
 apply_and_store_state_trees(Node, TreesIn, DifficultyIn, ForkId,
-                            #{currently_adding := Hash}) ->
+                            #{current_hash := Hash}) ->
     NodeHash = hash(Node),
     try
         assert_previous_height(Node),
@@ -482,6 +509,7 @@ find_fork_point(_Hash1, _Res1,_Hash2,_Res2) ->
 db_put_node(#block{} = Block, Hash) when is_binary(Hash) ->
     ok = aec_db:write_block(Block).
 
+%% NG-INFO Heigh/Hahs queries have sense in context of key blocks. For non-key height = 0
 db_find_node(Hash) when is_binary(Hash) ->
     case aec_db:find_header(Hash) of
         {value, Header} -> {ok, wrap_header(Header)};
@@ -492,6 +520,7 @@ db_get_node(Hash) when is_binary(Hash) ->
     {ok, Node} = db_find_node(Hash),
     Node.
 
+%% NG-INFO Heigh/Hahs queries have sense in context of key blocks. For non-key height = 0
 db_find_nodes_at_height(Height) when is_integer(Height) ->
     case aec_db:find_headers_at_height(Height) of
         [_|_] = Headers ->
@@ -544,6 +573,7 @@ db_children(#node{} = Node) ->
      || Header <- aec_db:find_headers_at_height(Height + 1),
         aec_headers:prev_hash(Header) =:= Hash].
 
+db_node_has_sibling_blocks(#node{type = micro}) -> false;
 db_node_has_sibling_blocks(Node) ->
     Height   = node_height(Node),
     PrevHash = prev_hash(Node),
