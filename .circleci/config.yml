@@ -15,7 +15,7 @@ references:
       DOCKERHUB_REPO: aeternity/epoch
 
   machine_config: &machine_config
-    machine: true
+    machine:
       docker_layer_caching: true
     working_directory: ~/epoch
 
@@ -66,7 +66,6 @@ references:
           && tar -zxf libsodium-src.tar.gz -C libsodium-src --strip-components=1 \
           && cd libsodium-src \
           && ./configure && make -j$(nproc) && sudo make install && sudo ldconfig
-
 
   rebar_cache_key: &rebar_cache_key rebar-cache-{{ checksum "rebar.lock" }}-{{ checksum "rebar.config" }}
   restore_rebar_cache: &restore_rebar_cache
