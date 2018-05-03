@@ -426,14 +426,22 @@ jobs:
       - *install_otp
       - *install_libsodium
       - run:
-          name: Prepare docker images
+          name: Build local docker image
           command: |
             docker build -t ${DOCKERHUB_REPO:?}:local .
-            make system-test-deps
+      - run:
+          name: Prepare suitable user to run tests
+          command: |
+            sudo usermod -aG docker ubuntu
+            sudo chown -R ubuntu:ubuntu ${CIRCLE_WORKING_DIRECTORY:?}
+      - run:
+          name: Install system tests dependancies
+          command: |
+            sudo -u ubuntu -c 'make system-test-deps'
       - run:
           name: System Tests
           command: |
-            make system-test
+            sudo -u ubuntu -c 'make system-test'
       # - *fail_notification
       - store_test_results:
           path: system_test/logs
