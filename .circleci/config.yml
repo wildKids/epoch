@@ -435,7 +435,7 @@ jobs:
           name: Prepare suitable user to run tests
           command: |
             sudo usermod -aG docker ubuntu
-            sudo chown -R ubuntu:ubuntu ${CIRCLE_WORKING_DIRECTORY:?}
+            sudo chown -R ubuntu:ubuntu ~/epoch
       - run:
           name: Install system tests dependancies
           command: |
