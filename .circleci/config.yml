@@ -439,11 +439,11 @@ jobs:
       - run:
           name: Install system tests dependancies
           command: |
-            sudo -u ubuntu -c 'make system-test-deps'
+            sudo -u ubuntu make system-test-deps
       - run:
           name: System Tests
           command: |
-            sudo -u ubuntu -c 'make system-test'
+            sudo -u ubuntu make system-test
       # - *fail_notification
       - store_test_results:
           path: system_test/logs
