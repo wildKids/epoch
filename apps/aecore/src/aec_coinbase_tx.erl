@@ -60,9 +60,7 @@ origin(#coinbase_tx{}) ->
 
 -spec check(tx(), aetx:tx_context(), aec_trees:trees(), height(), non_neg_integer()) ->
                     {ok, aec_trees:trees()} | {error, term()}.
-check(#coinbase_tx{block_height = CBHeight}, _Context, _Trees, Height, _ConsensusVersion)
-    when CBHeight =/= Height ->
-    {error, wrong_height};
+%% NG-INFO, all will be removed by Luca
 check(#coinbase_tx{account = AccountPubkey, reward = Reward}, _Context, Trees, _Height, _ConsensusVersion) ->
     ExpectedReward = aec_governance:block_mine_reward(),
     case Reward =:= ExpectedReward of
