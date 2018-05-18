@@ -15,6 +15,7 @@ category info and up will still be directed to the console.
 * Moves contract account balances to account state tree. Also removes height and contract ID from contract state trees. This impacts consensus.
 * Removes unneeded height from the account object in the block state. This impacts consensus.
 * Enhances user experience for Channels' websockets with broadcasting co-signed on-chain transactions to participants before posting. This allows them to track the progress of the transactions as well to store them locally in case of conflict resolution.
+* Resolve name to pubkey pointers during mining for spend receiver, name transfer receiver and oracle query address, clear text names will be persisted in these transaction structures. Corresponding HTTP-endpoints now accept and return clear text names or encoded pubkeys for these fields.
 
 [this-release]: https://github.com/aeternity/epoch/releases/tag/v0.14.0
 
